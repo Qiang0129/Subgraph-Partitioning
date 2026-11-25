@@ -45,8 +45,9 @@ def test_crop_matches_decoded_source(tmp_path):
 
 
 def test_text_crossing_detected_and_unavailable_not_success():
-    issues=check_layout(layout(),{"available":True,"boxes":[{"text":"MC-3T3-E1","rect":[40,5,60,15]}]})
-    assert sum(i["code"]=="TEXT_INTERSECTION" for i in issues)==2
+    issues=check_layout(layout(),{"available":True,"boxes":[{"text":"axis","rect":[40,5,60,15]}]})
+    assert any(i["code"]=="TEXT_CHECK_UNAVAILABLE" for i in issues)
+    assert not any(i["code"]=="TEXT_INTERSECTION" for i in issues)
     assert any(i["code"]=="OCR_UNAVAILABLE" for i in check_layout(layout()))
 
 

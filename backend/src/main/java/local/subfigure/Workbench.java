@@ -31,12 +31,29 @@ public class Workbench {
             String entry=body.getOrDefault(key,"").toString().trim(); require(!entry.isEmpty(),"缺少配置字段："+key); value.put(key,entry);
         }
         require(Set.of("chat","responses").contains(value.get("protocol")),"不支持的模型协议");
+        String effort=Objects.toString(body.getOrDefault("reasoning_effort",previous.getOrDefault("reasoning_effort","default")),"");
+        require(Set.of("default","none","minimal","low","medium","high","xhigh","max").contains(effort),"不支持的思考程度");
+        value.put("reasoning_effort",effort);
         String key=body.getOrDefault("api_key","").toString();
         require(!key.isEmpty()||previous.containsKey("key_cipher"),"请填写 API Key");
         value.put("key_cipher",key.isEmpty()?previous.get("key_cipher"):store.encrypt(key));
         value.put("timeout_seconds",Math.clamp(integer(body.get("timeout_seconds"),90),5,300));
         value.put("verified",false); value.put("updated_at",Instant.now().toString());
         store.put("provider",id,value); return store.publicProvider(value);
+    }
+    Map<String,Object> providerModels(Map<String,Object> body) {
+        String base=Objects.toString(body.get("base_url"),"").trim();
+        require(!base.isEmpty(),"请先填写接口地址");
+        String key=Objects.toString(body.get("api_key"),"");
+        String id=Objects.toString(body.get("id"),"");
+        if(key.isBlank()&&!id.isBlank()) {
+            var previous=store.get("provider",id);
+            require(base.replaceAll("/+$","").equals(previous.get("base_url").toString().replaceAll("/+$","")),"接口地址已改变，请重新填写 API Key 后获取模型列表");
+            require(previous.containsKey("key_cipher"),"请先填写 API Key");
+            key=store.decrypt(previous.get("key_cipher").toString());
+        }
+        require(!key.isBlank(),"请先填写 API Key");
+        return agent.call("POST","/models",Map.of("base_url",base,"api_key",key,"timeout_seconds",30));
     }
     Map<String,Object> probe(String id) {
         var p=store.get("provider",id); var result=agent.call("POST","/probe",store.providerSecret(p));

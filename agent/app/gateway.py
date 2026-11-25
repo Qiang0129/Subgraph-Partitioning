@@ -6,12 +6,59 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .models import Provider
+from .models import Provider, ProviderConnection
 from .vision import data_image, read_image
 
 
 class BudgetExceeded(RuntimeError):
     pass
+
+
+def connection_url(base_url: str) -> str:
+    base = base_url.strip().rstrip("/")
+    try:
+        parsed = urlparse(base)
+        parsed.port  # Validate port syntax before any network request.
+    except ValueError:
+        raise ValueError("接口地址格式无效，请检查主机和端口") from None
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("接口地址须为 HTTP(S) URL，不能含用户名、密码、查询参数或锚点")
+    return base
+
+
+def list_models(connection: ProviderConnection) -> dict:
+    base = connection_url(connection.base_url)
+    for suffix in ("/chat/completions", "/responses"):
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+            break
+    endpoint = base if base.endswith("/models") else base + "/models"
+    try:
+        response = httpx.get(endpoint, headers={"Authorization": f"Bearer {connection.api_key}"},
+                             timeout=min(connection.timeout_seconds, 30), follow_redirects=False)
+    except (httpx.RequestError, httpx.InvalidURL):
+        raise RuntimeError("获取模型列表超时或网络不可达，请检查接口地址、代理和网络") from None
+    if response.status_code in (401, 403):
+        raise RuntimeError(f"模型列表鉴权失败（HTTP {response.status_code}），请检查 API Key 和访问权限")
+    if response.status_code in (404, 405):
+        raise RuntimeError("接口未提供 /models 模型列表，请核对地址，或直接手动填写模型 ID")
+    if not 200 <= response.status_code < 300:
+        raise RuntimeError(f"获取模型列表失败（HTTP {response.status_code}），请检查服务状态；也可手动填写模型 ID")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise RuntimeError("模型列表不是有效 JSON，请核对接口地址；也可手动填写模型 ID") from None
+    entries = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(entries, list) or len(entries) > 10000:
+        raise RuntimeError("模型列表格式不支持，预期 data 数组；可手动填写模型 ID")
+    models = set()
+    for entry in entries:
+        identifier = entry.get("id") if isinstance(entry, dict) else entry
+        if isinstance(identifier, str) and identifier.strip():
+            models.add(identifier.strip())
+    if entries and not models:
+        raise RuntimeError("模型列表缺少有效模型 ID；可手动填写模型 ID")
+    return {"models": sorted(models, key=str.casefold)}
 
 
 class Gateway:
@@ -20,10 +67,7 @@ class Gateway:
         self.max_calls, self.max_seconds = max_calls, max_seconds
 
     def endpoint(self):
-        base = self.provider.base_url.rstrip("/")
-        parsed = urlparse(base)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password:
-            raise ValueError("Provider URL must be HTTP(S), without embedded credentials")
+        base = connection_url(self.provider.base_url)
         suffix = "/chat/completions" if self.provider.protocol == "chat" else "/responses"
         if base.endswith(("/chat/completions", "/responses")):
             if not base.endswith(suffix):
@@ -50,7 +94,8 @@ class Gateway:
                 time.sleep(2 ** retry)
                 continue
             if response.is_error:
-                raise RuntimeError(f"模型 HTTP {response.status_code}；请核对供应商配置和协议")
+                hint = "；请尝试将思考程度改为接口默认，或核对模型支持的档位" if response.status_code == 400 and self.provider.reasoning_effort != "default" else ""
+                raise RuntimeError(f"模型 HTTP {response.status_code}；请核对供应商配置和协议{hint}")
             data = response.json()
             usage = data.get("usage", {})
             self.state.setdefault("usage", []).append(usage)
@@ -67,6 +112,8 @@ class Gateway:
                             url, _ = data_image(read_image(part["path"]))
                             message["content"][i] = {"type": "image_url", "image_url": {"url": url}}
             payload = {"model": self.provider.model, "messages": history, "tools": tools}
+            if self.provider.reasoning_effort != "default":
+                payload["reasoning_effort"] = self.provider.reasoning_effort
             if force:
                 payload["tool_choice"] = {"type": "function", "function": {"name": force}}
             raw = self.post(payload)
@@ -96,6 +143,8 @@ class Gateway:
                     native_input.append({"role": message["role"], "content": parts})
         payload = {"model": self.provider.model, "input": native_input, "store": False,
                    "tools": [{"type": "function", **t["function"]} for t in tools]}
+        if self.provider.reasoning_effort != "default":
+            payload["reasoning"] = {"effort": self.provider.reasoning_effort}
         if force:
             payload["tool_choice"] = {"type": "function", "name": force}
         raw = self.post(payload)

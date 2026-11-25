@@ -21,7 +21,11 @@ public class AgentClient {
             if(method.equals("GET")) builder.GET();
             else builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(store.json.writeValueAsString(payload)));
             var response=client.send(builder.build(),HttpResponse.BodyHandlers.ofString());
-            if(response.statusCode()>=400) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Agent: "+response.body().substring(0,Math.min(500,response.body().length())));
+            if(response.statusCode()>=400) {
+                String message="Agent 请求失败（HTTP "+response.statusCode()+"）";
+                try { var error=store.parse(response.body()); if(error.get("detail") instanceof String detail) message=detail; } catch(Exception ignored) {}
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,message.substring(0,Math.min(500,message.length())));
+            }
             return store.parse(response.body());
         } catch(ResponseStatusException e) { throw e; }
         catch(Exception e) { throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Agent 服务暂不可用，请检查启动日志"); }

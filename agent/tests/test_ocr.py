@@ -35,6 +35,7 @@ def test_ocr_windows_configuration_bgr_and_reuse(monkeypatch, tmp_path):
         assert result["available"] is True
         assert result["boxes"][0]["text"] == "HUVEC"
         assert result["boxes"][0]["rect"] == [0, 0, 3, 2]
+        assert result["boxes"][0]["polygon"] == [[0, 0], [2, 0], [2, 1], [0, 1]]
     assert len(calls) == 1
     assert calls[0]["device"] == "cpu"
     assert calls[0]["enable_mkldnn"] is False

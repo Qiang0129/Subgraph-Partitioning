@@ -51,7 +51,7 @@ public class Store {
     String encrypt(String key) { return Base64.getEncoder().encodeToString(Crypt32Util.cryptProtectData(key.getBytes(StandardCharsets.UTF_8))); }
     String decrypt(String cipher) { return new String(Crypt32Util.cryptUnprotectData(Base64.getDecoder().decode(cipher)),StandardCharsets.UTF_8); }
     Map<String,Object> publicProvider(Map<String,Object> source) {
-        var value=new LinkedHashMap<>(source); value.remove("key_cipher"); value.remove("api_key"); value.put("has_key",source.containsKey("key_cipher")); return value;
+        var value=new LinkedHashMap<>(source); value.remove("key_cipher"); value.remove("api_key"); value.put("has_key",source.containsKey("key_cipher")); value.putIfAbsent("reasoning_effort","default"); return value;
     }
     Map<String,Object> providerSecret(Map<String,Object> source) {
         var value=new LinkedHashMap<>(source); value.put("api_key",decrypt(value.remove("key_cipher").toString())); return value;

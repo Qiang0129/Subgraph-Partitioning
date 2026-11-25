@@ -23,6 +23,7 @@ public class Api {
     }
     @GetMapping("/providers") Object providers() { return store.list("provider").stream().map(store::publicProvider).toList(); }
     @PostMapping("/providers") Object saveProvider(@RequestBody Map<String,Object> body) { return work.provider(body); }
+    @PostMapping("/providers/models") Object providerModels(@RequestBody Map<String,Object> body) { return work.providerModels(body); }
     @PostMapping("/providers/{id}/probe") Object probe(@PathVariable String id) { return work.probe(id); }
     @DeleteMapping("/providers/{id}") void deleteProvider(@PathVariable String id) { store.delete("provider",id); }
     @GetMapping("/batches") Object batches() { return store.list("batch"); }

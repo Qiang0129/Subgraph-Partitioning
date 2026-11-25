@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 import zipfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 from PIL import Image, ImageChops, ImageDraw
@@ -31,6 +33,15 @@ def main(real_ocr=False):
          'SFA_AGENT_URL':'http://127.0.0.1:8776','SFA_LEGACY':str(ROOT.parent/'子图划分结果'/'result12'),
          'LANGCHAIN_TRACING_V2':'false','LANGSMITH_TRACING':'false'}
     children=[];logs=[];checks=[]
+    class ModelsFixture(BaseHTTPRequestHandler):
+        def do_GET(self):
+            accepted=self.path=='/v1/models' and self.headers.get('Authorization')=='Bearer SYNTHETIC_NOT_A_REAL_KEY'
+            body=json.dumps({'data':[{'id':'fixture-vision'},{'id':'fixture-reasoner'},{'id':'fixture-vision'}]} if accepted else {'error':'fixture authorization failed'}).encode()
+            self.send_response(200 if accepted else 401);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(body)
+        def log_message(self,*args):pass
+    models_server=ThreadingHTTPServer(('127.0.0.1',0),ModelsFixture)
+    threading.Thread(target=models_server.serve_forever,daemon=True).start()
+    models_base=f'http://127.0.0.1:{models_server.server_port}/v1'
     def check(condition,name):
         assert condition,name
         checks.append(name)
@@ -81,8 +92,21 @@ def main(real_ocr=False):
         check(exported['shared_regions'][0]['panel_ids']==['p_A','p_B'],'shared title associations exported')
         request('POST',f'/images/{image_id}/gold',json={'notes':'synthetic QA only'})
         check(len(request('GET','/gold').json()['images'])==1,'gold export requires manual confirmation')
-        provider=request('POST','/providers',json={'name':'synthetic unverified fixture','base_url':'http://127.0.0.1:1/v1','model':'fixture','protocol':'chat','api_key':'SYNTHETIC_NOT_A_REAL_KEY'}).json()
+        discovery=request('POST','/providers/models',json={'base_url':models_base+'/responses','api_key':'SYNTHETIC_NOT_A_REAL_KEY'}).json()
+        check(discovery=={'models':['fixture-reasoner','fixture-vision']},'unsaved URL and key retrieve deduplicated models through Java and Python')
+        check(request('GET','/providers').json()==[],'model discovery does not save a provider or key')
+        provider=request('POST','/providers',json={'name':'synthetic unverified fixture','base_url':models_base,'model':'fixture','protocol':'chat','api_key':'SYNTHETIC_NOT_A_REAL_KEY','reasoning_effort':'xhigh'}).json()
+        check(provider['reasoning_effort']=='xhigh','reasoning effort is persisted and returned')
         check('api_key' not in provider and 'key_cipher' not in provider and provider['has_key'],'public provider projection hides key material')
+        reused=request('POST','/providers/models',json={'id':provider['id'],'base_url':models_base,'api_key':''}).json()
+        check(reused==discovery,'saved encrypted key can retrieve models without re-entry')
+        request('POST','/providers/models',expected=400,json={'id':provider['id'],'base_url':models_base+'/changed'})
+        check(True,'changed unsaved URL cannot reuse saved provider key')
+        request('POST','/providers',expected=400,json={**provider,'reasoning_effort':'guess'})
+        updated=request('POST','/providers',json={**provider,'reasoning_effort':'high','api_key':''}).json()
+        check(updated['reasoning_effort']=='high' and updated['has_key'] and not updated['verified'],'editing reasoning preserves encrypted key and requires capability verification')
+        request('POST','/providers/models',expected=400,json={'base_url':models_base,'api_key':'synthetic-bad-key'})
+        check(True,'model list authentication failure is reported')
         with sqlite3.connect(DATA/'app.sqlite') as connection:
             # Query the live database so uncheckpointed WAL pages are included.
             payload='\n'.join(connection.iterdump())
@@ -101,8 +125,9 @@ def main(real_ocr=False):
                 checked=request('POST',f'/images/{real["id"]}/layout',timeout=180,json={
                     'revision':imported['revision'],'layout':imported['layout'],'confirm':False,'ocr':True}).json()
                 check(not any(i['code']=='OCR_UNAVAILABLE' for i in checked['issues']),'real PaddleOCR works through Java and Python HTTP services')
-                check(any(i['code']=='TEXT_INTERSECTION' and 'MC-3T3-E1' in i['message'] for i in checked['issues']),
-                      'real OCR flags the legacy shared-title cut on image 15')
+                check(not any(i['code']=='TEXT_INTERSECTION' and any(title in i['message'] for title in ['MC-3T3-E1','HUVEC'])
+                              for i in checked['issues']),
+                      'real OCR ignores optional external group headings on image 15')
             check(original.read_bytes()==raw,'user original remains unchanged')
         elif real_ocr:raise AssertionError('--ocr requires the local image 15 fixture')
         result={'passed':len(checks),'checks':checks,'data_directory':str(DATA),'real_ocr_tested':real_ocr,'model_quality_tested':False}
@@ -118,6 +143,7 @@ def main(real_ocr=False):
             try:child.wait(timeout=15)
             except subprocess.TimeoutExpired:child.kill()
         for log in logs:log.close()
+        models_server.shutdown();models_server.server_close()
 
 
 if __name__=='__main__':

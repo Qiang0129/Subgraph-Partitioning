@@ -9,6 +9,7 @@ import {
   Transformer,
 } from "react-konva";
 import "./style.css";
+import { Providers, type Provider } from "./Providers";
 
 type Region = {
   id: string;
@@ -35,15 +36,7 @@ type Picture = {
   calls?: number;
   versions?: { revision: number; status: string }[];
 };
-type Provider = {
-  id: string;
-  name: string;
-  model: string;
-  protocol: string;
-  base_url: string;
-  verified: boolean;
-  has_key?: boolean;
-};
+
 const names: Record<string, string> = {
   DRAFT: "草稿",
   QUEUED: "排队中",
@@ -361,187 +354,6 @@ function Editor({
   );
 }
 
-function Providers({
-  providers,
-  reload,
-  onClose,
-  notify,
-}: {
-  providers: Provider[];
-  reload: () => Promise<void>;
-  onClose: () => void;
-  notify: (s: string) => void;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const [form, setForm] = useState<any>({
-    name: "",
-    protocol: "chat",
-    base_url: "",
-    model: "",
-    api_key: "",
-  });
-  const [busy, setBusy] = useState("");
-  useEffect(() => {
-    dialog.current?.showModal();
-  }, []);
-  const perform = async (action: () => Promise<void>, key: string) => {
-    setBusy(key);
-    try {
-      await action();
-    } catch (e) {
-      notify((e as Error).message);
-    } finally {
-      setBusy("");
-    }
-  };
-  return (
-    <dialog ref={dialog} onCancel={onClose} className="provider-dialog">
-      <header>
-        <div>
-          <h2>模型供应商</h2>
-          <p>独立管理接口，启用前测试视觉输入与原生工具调用。</p>
-        </div>
-        <button onClick={onClose} aria-label="关闭模型配置">
-          ✕
-        </button>
-      </header>
-      <div className="provider-grid">
-        <section>
-          <h3>已配置接口</h3>
-          {providers.length === 0 ? (
-            <p>尚未配置。填写右侧表单添加你的视觉模型。</p>
-          ) : (
-            providers.map((p) => (
-              <div className="provider-row" key={p.id}>
-                <strong>{p.name}</strong>
-                <span>
-                  {p.model} · {p.protocol}
-                </span>
-                <span
-                  className={"status " + (p.verified ? "CONFIRMED" : "DRAFT")}
-                >
-                  {p.verified ? "能力测试通过" : "尚未验证"}
-                </span>
-                <div className="inline-actions">
-                  <button
-                    disabled={!!busy}
-                    onClick={() => {
-                      setForm({ ...p, api_key: "" });
-                    }}
-                  >
-                    编辑
-                  </button>
-                  <button
-                    disabled={!!busy}
-                    onClick={() =>
-                      perform(async () => {
-                        await api(`/providers/${p.id}/probe`, "POST", {});
-                        await reload();
-                        notify("视觉、工具调用和结果回传测试通过");
-                      }, p.id)
-                    }
-                  >
-                    {busy === p.id ? "正在测试…" : "测试能力"}
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
-        </section>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            perform(async () => {
-              await api("/providers", "POST", form);
-              await reload();
-              setForm({
-                name: "",
-                protocol: "chat",
-                base_url: "",
-                model: "",
-                api_key: "",
-              });
-              notify("配置已保存，需要重新测试能力");
-            }, "save");
-          }}
-        >
-          <h3>{form.id ? "编辑接口" : "新增接口"}</h3>
-          <label>
-            配置名称
-            <input
-              required
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-            />
-          </label>
-          <label>
-            协议
-            <select
-              value={form.protocol}
-              onChange={(e) => setForm({ ...form, protocol: e.target.value })}
-            >
-              <option value="chat">Chat Completions</option>
-              <option value="responses">Responses</option>
-            </select>
-          </label>
-          <label>
-            接口地址
-            <input
-              required
-              type="url"
-              placeholder="https://your-provider.example/v1"
-              value={form.base_url}
-              onChange={(e) => setForm({ ...form, base_url: e.target.value })}
-            />
-          </label>
-          <label>
-            模型名称
-            <input
-              required
-              value={form.model}
-              onChange={(e) => setForm({ ...form, model: e.target.value })}
-            />
-          </label>
-          <label>
-            API Key
-            <input
-              type="password"
-              autoComplete="off"
-              required={!form.id}
-              placeholder={form.id ? "留空保留现有密钥" : ""}
-              value={form.api_key}
-              onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-            />
-          </label>
-          <p className="hint">
-            密钥由 Windows
-            加密保存。测试会向该接口发送一张系统生成的数字图片，并产生少量调用。
-          </p>
-          <button className="primary" disabled={!!busy}>
-            {busy === "save" ? "保存中…" : "保存配置"}
-          </button>
-          {form.id && (
-            <button
-              type="button"
-              onClick={() =>
-                setForm({
-                  name: "",
-                  protocol: "chat",
-                  base_url: "",
-                  model: "",
-                  api_key: "",
-                })
-              }
-            >
-              取消编辑
-            </button>
-          )}
-        </form>
-      </div>
-    </dialog>
-  );
-}
-
 function App() {
   const [batches, setBatches] = useState<any[]>([]),
     [batchId, setBatchId] = useState(""),
@@ -640,7 +452,7 @@ function App() {
     if (
       confirmResult &&
       !confirm(
-        "请确认已逐一检查所有面板、文字、图形和共享标题。确认后将允许正式导出；OCR 或模型提示不能代替你的判断。",
+        "请确认已逐一检查子图内部的文字、坐标轴、图例和图形是否完整。外部分组标题可忽略。确认后将允许正式导出；检查提示不能代替你的判断。",
       )
     )
       return;
@@ -650,7 +462,7 @@ function App() {
         revision: detail.revision,
         confirm: confirmResult,
         acknowledge_warnings: confirmResult,
-        ocr: confirmResult,
+        ocr: true,
       });
       setDetail(p);
       setLayout(p.layout);
@@ -659,7 +471,7 @@ function App() {
       notify(
         confirmResult
           ? "已人工确认，正式导出将包含这张图"
-          : "草稿已保存，裁切预览已更新",
+          : "草稿已保存，裁切预览与文字完整性检查已更新",
       );
     });
   };
@@ -1150,12 +962,13 @@ function App() {
                   )}
                   <section className="issues">
                     <h3>检查记录</h3>
+                    <p className="hint">检查子图内部文字是否完整；外部分组标题可省略或部分带入。</p>
                     {dirty ? (
                       <p>有未保存修改。保存并试切后更新检查结果。</p>
                     ) : detail.issues?.length ? (
                       detail.issues.map((i, n) => (
                         <div className="issue" key={n}>
-                          <strong>{i.code}</strong>
+                          <strong>{i.severity === "info" ? "参考信息" : i.code}</strong>
                           <p>{i.message}</p>
                         </div>
                       ))
@@ -1224,10 +1037,11 @@ function App() {
       </main>
       <footer className="app-footer">
         <span>本机工作台 · 原图只读 · 正式导出仅包含通过结果</span>
-        <span>共享标题单独保留并关联面板</span>
+        <span>外部分组标题可忽略 · 共享标题按需保留</span>
       </footer>
       {showProviders && (
         <Providers
+          request={api}
           providers={providers}
           reload={reloadProviders}
           onClose={() => setShowProviders(false)}

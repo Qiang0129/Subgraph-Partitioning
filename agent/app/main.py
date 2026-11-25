@@ -15,8 +15,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from PIL import Image, ImageDraw, ImageFont
 
-from .gateway import Gateway, function_schema, user_images
-from .models import Layout, Provider, WorkRequest
+from .gateway import Gateway, function_schema, user_images, list_models
+from .models import Layout, Provider, ProviderConnection, WorkRequest
 from .vision import atomic_json, crop_layout, detect_text, import_legacy, read_image
 from .workflow import FigureWorkflow
 
@@ -109,6 +109,14 @@ def probe(provider: Provider):
         raise HTTPException(422, str(error)[:300]) from None
     finally:
         path.unlink(missing_ok=True)
+
+
+@app.post("/models")
+def models(connection: ProviderConnection):
+    try:
+        return list_models(connection)
+    except (ValueError, RuntimeError) as error:
+        raise HTTPException(422, str(error)) from None
 
 
 def execute(request: WorkRequest, mode: str, decision: dict | None = None):

@@ -13,11 +13,13 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
 from .models import Issue, Layout
+from .text_integrity import text_integrity_issues
 
 Image.MAX_IMAGE_PIXELS = 40_000_000
 _ocr_lock = threading.Lock()
 _ocr_engine = None
 _logger = logging.getLogger(__name__)
+TEXT_POLICY = "panel_internal_ink_v1; external group headings optional"
 
 
 def _configure_ocr_environment() -> Path:
@@ -102,6 +104,7 @@ def detect_text(path: str | Path) -> dict:
             for poly, text, score in zip(result["rec_polys"], result["rec_texts"], result["rec_scores"]):
                 points = np.asarray(poly).astype(float)
                 boxes.append({"text": str(text), "score": float(score),
+                              "polygon": points.tolist(),
                               "rect": [int(points[:, 0].min()), int(points[:, 1].min()),
                                        int(points[:, 0].max()) + 1, int(points[:, 1].max()) + 1]})
             return {"available": True, "boxes": boxes}
@@ -122,29 +125,21 @@ def structure(path: str) -> dict:
             "note": "Whitespace is evidence, not a required global grid. Shared titles can cross columns."}
 
 
-def check_layout(layout: Layout, text: dict | None = None) -> list[dict]:
+def check_layout(layout: Layout, text: dict | None = None, image: Image.Image | None = None) -> list[dict]:
     issues = []
     if not layout.panels:
         issues.append(Issue(code="NO_PANELS", severity="error", message="没有面板，不能确认或导出正式结果"))
     if not text or not text.get("available"):
         issues.append(Issue(code="OCR_UNAVAILABLE", severity="warning", message="未获得有效 OCR，不能自动通过"))
     else:
-        for region in layout.panels + layout.shared_regions:
-            x1, y1, x2, y2 = region.rect
-            for word in text.get("boxes", []):
-                a, b, c, d = word["rect"]
-                intersection = max(0, min(x2, c) - max(x1, a)) * max(0, min(y2, d) - max(y1, b))
-                area = max(1, (c-a)*(d-b))
-                if .04 < intersection / area < .96:
-                    issues.append(Issue(code="TEXT_INTERSECTION", severity="warning", region_id=region.id,
-                                        message=f"边界疑似切过文字：{word['text'][:80]}"))
+        issues.extend(text_integrity_issues(layout, text, image))
     for i, first in enumerate(layout.panels):
         for second in layout.panels[i+1:]:
             a,b,c,d = first.rect
             e,f,g,h = second.rect
             if min(c,g) > max(a,e) and min(d,h) > max(b,f):
-                issues.append(Issue(code="PANEL_OVERLAP", severity="warning", region_id=first.id,
-                                    message=f"面板 {first.label}/{second.label} 重叠，需要确认内容归属"))
+                issues.append(Issue(code="PANEL_OVERLAP", severity="info", region_id=first.id,
+                                    message=f"面板 {first.label}/{second.label} 的裁框有交叠；主体完整且不影响阅读时无需调整"))
     return [issue.model_dump() for issue in issues]
 
 
@@ -169,7 +164,8 @@ def crop_layout(source: str, layout: Layout, target: Path, text: dict | None = N
     payload.update({"source": {"name": Path(source).name, "sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest()},
                     "files": paths, "coordinate_system": "normalized source pixels; [x1,y1,x2,y2)"})
     atomic_json(target / "layout.json", payload)
-    report = {"issues": check_layout(layout, text), "status": "DRAFT", "pixel_crop": True}
+    report = {"issues": check_layout(layout, text, image), "status": "DRAFT", "pixel_crop": True,
+              "text_policy": TEXT_POLICY}
     atomic_json(target / "check_report.json", report)
     return {"directory": str(target), "layout": payload, "report": report}
 

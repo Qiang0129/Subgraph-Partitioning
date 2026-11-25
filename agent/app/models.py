@@ -42,14 +42,18 @@ class Layout(BaseModel):
         return self
 
 
-class Provider(BaseModel):
-    id: str = ""
-    name: str = ""
+class ProviderConnection(BaseModel):
     base_url: str
-    protocol: Literal["chat", "responses"] = "chat"
-    model: str
     api_key: str = ""
     timeout_seconds: int = Field(default=90, ge=5, le=300)
+
+
+class Provider(ProviderConnection):
+    id: str = ""
+    name: str = ""
+    protocol: Literal["chat", "responses"] = "chat"
+    model: str
+    reasoning_effort: Literal["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"] = "default"
     verified: bool = False
 
 
